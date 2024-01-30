@@ -3929,25 +3929,39 @@ typedef struct {
   } toggle_refs[1];  /* flexible array */
 } ToggleRefStack;
 
-static GToggleNotify
-toggle_refs_get_notify_unlocked (GObject *object,
-                                 gpointer *out_data)
+typedef struct
 {
-  ToggleRefStack *tstackptr;
+  GObject *object;
+  GToggleNotify *toggle_notify;
+  gpointer *toggle_data;
+  gint *old_ref;
+  gint increment;
+} ToggleRefsCheckAndRefData;
 
-  if (!OBJECT_HAS_TOGGLE_REF (object))
-    return NULL;
+static gpointer
+toggle_refs_check_and_ref_cb (GQuark key_id,
+                              gpointer *data,
+                              GDestroyNotify *destroy_notify,
+                              gpointer user_data)
+{
+  ToggleRefsCheckAndRefData *trdata = user_data;
+  ToggleRefStack *tstackptr = *data;
+  gboolean success;
+  gint r = *trdata->old_ref;
 
-  tstackptr = g_datalist_id_get_data (&object->qdata, quark_toggle_refs);
+  /* We MUST always refetch trdata->old_ref! */
+  success = g_atomic_int_compare_and_exchange_full ((int *) &trdata->object->ref_count,
+                                                    r,
+                                                    r + trdata->increment,
+                                                    trdata->old_ref);
 
-  if (tstackptr->n_toggle_refs != 1)
+  if (success && tstackptr && tstackptr->n_toggle_refs == 1)
     {
-      g_critical ("Unexpected number of toggle-refs. g_object_add_toggle_ref() must be paired with g_object_remove_toggle_ref()");
-      return NULL;
+      *trdata->toggle_notify = tstackptr->toggle_refs[0].notify;
+      *trdata->toggle_data = tstackptr->toggle_refs[0].data;
     }
 
-  *out_data = tstackptr->toggle_refs[0].data;
-  return tstackptr->toggle_refs[0].notify;
+  return GINT_TO_POINTER (!!success);
 }
 
 static gboolean
@@ -3957,19 +3971,27 @@ toggle_refs_check_and_ref (GObject *object,
                            gint *old_ref,
                            gint increment)
 {
-  gboolean success;
-  gint r = *old_ref;
+  gpointer result;
+
+  *toggle_notify = NULL;
+  *toggle_data = NULL;
 
   object_bit_lock (object, OPTIONAL_BIT_LOCK_TOGGLE_REFS);
 
-  *toggle_notify = toggle_refs_get_notify_unlocked (object, toggle_data);
-
-  success = g_atomic_int_compare_and_exchange_full ((int *) &object->ref_count,
-                                                    r, r + increment, old_ref);
+  result = _g_datalist_id_update_atomic (&object->qdata,
+                                         quark_toggle_refs,
+                                         toggle_refs_check_and_ref_cb,
+                                         &((ToggleRefsCheckAndRefData){
+                                             .object = object,
+                                             .toggle_notify = toggle_notify,
+                                             .toggle_data = toggle_data,
+                                             .old_ref = old_ref,
+                                             .increment = increment,
+                                         }));
 
   object_bit_unlock (object, OPTIONAL_BIT_LOCK_TOGGLE_REFS);
 
-  return success;
+  return GPOINTER_TO_INT (result);
 }
 
 /**
