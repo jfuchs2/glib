@@ -68,9 +68,6 @@
 #define PARAM_SPEC_PARAM_ID(pspec)		((pspec)->param_id)
 #define	PARAM_SPEC_SET_PARAM_ID(pspec, id)	((pspec)->param_id = (id))
 
-#define OBJECT_HAS_TOGGLE_REF_FLAG 0x1
-#define OBJECT_HAS_TOGGLE_REF(object) \
-    ((g_datalist_get_flags (&(object)->qdata) & OBJECT_HAS_TOGGLE_REF_FLAG) != 0)
 #define OBJECT_FLOATING_FLAG 0x2
 
 #define CLASS_HAS_PROPS_FLAG 0x1
@@ -3955,10 +3952,17 @@ toggle_refs_check_and_ref_cb (GQuark key_id,
                                                     r + trdata->increment,
                                                     trdata->old_ref);
 
-  if (success && tstackptr && tstackptr->n_toggle_refs == 1)
+  if (success && tstackptr)
     {
-      *trdata->toggle_notify = tstackptr->toggle_refs[0].notify;
-      *trdata->toggle_data = tstackptr->toggle_refs[0].data;
+      if (tstackptr->n_toggle_refs != 1)
+        {
+          g_critical ("Unexpected number of toggle-refs. g_object_add_toggle_ref() must be paired with g_object_remove_toggle_ref()");
+        }
+      else
+        {
+          *trdata->toggle_notify = tstackptr->toggle_refs[0].notify;
+          *trdata->toggle_data = tstackptr->toggle_refs[0].data;
+        }
     }
 
   return GINT_TO_POINTER (!!success);
@@ -4070,10 +4074,6 @@ g_object_add_toggle_ref (GObject       *object,
       i = 0;
     }
 
-  /* Set a flag for fast lookup after adding the first toggle reference */
-  if (tstack->n_toggle_refs == 1)
-    g_datalist_set_flags (&object->qdata, OBJECT_HAS_TOGGLE_REF_FLAG);
-  
   tstack->toggle_refs[i].notify = notify;
   tstack->toggle_refs[i].data = data;
   g_datalist_id_set_data_full (&object->qdata, quark_toggle_refs, tstack,
@@ -4128,7 +4128,6 @@ g_object_remove_toggle_ref (GObject       *object,
 
 	    if (tstack->n_toggle_refs == 0)
 	      {
-	        g_datalist_unset_flags (&object->qdata, OBJECT_HAS_TOGGLE_REF_FLAG);
 	        g_datalist_id_set_data_full (&object->qdata, quark_toggle_refs, NULL, NULL);
 	      }
 
